@@ -1,28 +1,89 @@
-// #include "RedisParser.cpp"
+#include <algorithm>
 #include <arpa/inet.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <netdb.h>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <thread>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
+std::unordered_map<std::string, std::function<std::string(const std::string &)>>
+    commandMap;
+
+std::string encodeRedisString(const std::string &responseString) {
+  std::string response = "$" + std::to_string(responseString.length());
+  response += "\r\n" + responseString + "\r\n";
+  return response;
+}
+
+std::vector<std::string> decodeRedisString(const std::string &rawBuffer) {
+  std::vector<std::string> result;
+  std::string_view token = "\r\n";
+  size_t start = 0;
+  size_t end = rawBuffer.find(token);
+
+  while (end != std::string::npos) {
+    result.emplace_back(rawBuffer.substr(start, end - start));
+    start = end + token.length();
+    end = rawBuffer.find(token, start);
+  }
+
+  if (start < rawBuffer.length()) {
+    result.emplace_back(rawBuffer.substr(start));
+  }
+
+  return result;
+}
+
+std::string handleRedisArray(const std::vector<std::string> &commandList) {
+  std::string command = commandList[2];
+  std::string response;
+  std::transform(command.begin(), command.end(), command.begin(), ::tolower);
+
+  if (command == "echo") {
+    response = encodeRedisString(commandList[4]);
+  }
+
+  if (command == "ping") {
+    response = encodeRedisString("PONG");
+  }
+
+  return response;
+}
+
+std::string handleRedisCommand(const std::string &commandBuffer) {
+  std::string res;
+  std::vector<std::string> commandList = decodeRedisString(commandBuffer);
+
+  if (commandList[0].find("*") != std::string::npos) {
+    res = handleRedisArray(commandList);
+  }
+
+  return res;
+}
+
 void handleClient(int client_fd) {
+  std::string totalMessage;
   while (true) {
     char buffer[1024];
-    int bytesRead = recv(client_fd, &buffer, sizeof(buffer), 0);
+    int bytesRead = recv(client_fd, buffer, sizeof(buffer), 0);
     if (bytesRead <= 0) {
-      close(client_fd);
       break;
     }
-    // Parse the buffer here to dictate which command was sent
 
-    std::cout << "sending to " << client_fd << "\n";
-    send(client_fd, "+PONG\r\n", 7, 0);
+    totalMessage.append(buffer, bytesRead);
+    std::string res = handleRedisCommand(totalMessage);
+    if (res.length() > 0) {
+      send(client_fd, res.c_str(), res.length(), 0);
+    }
   }
 }
 
@@ -65,6 +126,9 @@ int main(int argc, char **argv) {
 
   struct sockaddr_in client_addr;
   int client_addr_len = sizeof(client_addr);
+  std::vector<std::thread> client_threads;
+
+  commandMap["echo"] = [](const std::string &echoString) { return "Hi"; };
 
   while (true) {
     std::cout << "Waiting for a client to connect...\n";
@@ -72,8 +136,13 @@ int main(int argc, char **argv) {
                            (socklen_t *)&client_addr_len);
 
     // Spin off new thread here to handle client traffic
-    std::thread t(handleClient, client_fd);
-    t.detach();
+    client_threads.emplace_back(handleClient, client_fd);
+  }
+
+  for (auto &thread : client_threads) {
+    if (thread.joinable()) {
+      thread.join();
+    }
   }
 
   close(server_fd);
