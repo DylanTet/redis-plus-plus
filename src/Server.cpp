@@ -1,3 +1,4 @@
+#include "RedisParser.hpp"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cctype>
@@ -18,57 +19,7 @@
 std::unordered_map<std::string, std::function<std::string(const std::string &)>>
     commandMap;
 
-std::string encodeRedisString(const std::string &responseString) {
-  std::string response = "$" + std::to_string(responseString.length());
-  response += "\r\n" + responseString + "\r\n";
-  return response;
-}
-
-std::vector<std::string> decodeRedisString(const std::string &rawBuffer) {
-  std::vector<std::string> result;
-  std::string_view token = "\r\n";
-  size_t start = 0;
-  size_t end = rawBuffer.find(token);
-
-  while (end != std::string::npos) {
-    result.emplace_back(rawBuffer.substr(start, end - start));
-    start = end + token.length();
-    end = rawBuffer.find(token, start);
-  }
-
-  if (start < rawBuffer.length()) {
-    result.emplace_back(rawBuffer.substr(start));
-  }
-
-  return result;
-}
-
-std::string handleRedisArray(const std::vector<std::string> &commandList) {
-  std::string command = commandList[2];
-  std::string response;
-  std::transform(command.begin(), command.end(), command.begin(), ::tolower);
-
-  if (command == "echo") {
-    response = encodeRedisString(commandList[4]);
-  }
-
-  if (command == "ping") {
-    response = encodeRedisString("PONG");
-  }
-
-  return response;
-}
-
-std::string handleRedisCommand(const std::string &commandBuffer) {
-  std::string res;
-  std::vector<std::string> commandList = decodeRedisString(commandBuffer);
-
-  if (commandList[0].find("*") != std::string::npos) {
-    res = handleRedisArray(commandList);
-  }
-
-  return res;
-}
+RedisParser parser;
 
 void handleClient(int client_fd) {
   std::string totalMessage;
@@ -80,10 +31,14 @@ void handleClient(int client_fd) {
     }
 
     totalMessage.append(buffer, bytesRead);
-    std::string res = handleRedisCommand(totalMessage);
+
+    // Get the response back from the client if there is supposed to be a
+    // response
+    std::string res = parser.handleRedisCommand(totalMessage);
     if (res.length() > 0) {
       send(client_fd, res.c_str(), res.length(), 0);
     }
+    totalMessage.clear();
   }
 }
 
