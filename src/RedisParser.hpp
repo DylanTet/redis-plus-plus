@@ -1,8 +1,14 @@
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+struct MapValue {
+  std::string value;
+  std::chrono::steady_clock::time_point expireTime;
+};
 
 class RedisParser {
 public:
@@ -37,12 +43,7 @@ public:
     // [0] is the length of array
     // [1] is the length of the command
 
-    for (auto word : commandList) {
-      std::cout << word << '\n';
-    }
-
     std::string command = commandList[2];
-    std::cout << "Command: " << command << '\n';
     std::string response;
     std::transform(command.begin(), command.end(), command.begin(), ::tolower);
     if (command == "echo") {
@@ -54,15 +55,31 @@ public:
     }
 
     if (command == "set") {
-      internalMap.insert({commandList[4], commandList[6]});
+
+      if (commandList.size() > 7) {
+        int64_t expireValue = std::stoll(commandList[8]);
+        std::cout << expireValue << '\n';
+        internalMap.insert(
+            {commandList[4],
+             {commandList[6], std::chrono::steady_clock::now() +
+                                  std::chrono::milliseconds(expireValue)}});
+      } else {
+        internalMap.insert(
+            {commandList[4],
+             {commandList[6], std::chrono::steady_clock::time_point::max()}});
+      }
+
       response = encodeRedisString("OK");
     }
 
     if (command == "get") {
       std::cout << "Running get\n";
       auto found = internalMap.find(commandList[4]);
-      if (found != internalMap.end()) {
-        response = encodeRedisString(found->second);
+      if (found != internalMap.end() &&
+          found->second.expireTime < std::chrono::steady_clock::now()) {
+        std::string value = found->second.value;
+
+        response = encodeRedisString(value);
       } else {
         response = nullBulkString;
       }
@@ -83,6 +100,6 @@ public:
   }
 
 private:
-  std::unordered_map<std::string, std::string> internalMap;
+  std::unordered_map<std::string, MapValue> internalMap;
   std::string nullBulkString = "$-1\r\n";
 };
