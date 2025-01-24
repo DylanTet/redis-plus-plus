@@ -57,8 +57,7 @@ public:
     if (command == "set") {
 
       if (commandList.size() > 7) {
-        int64_t expireValue = std::stoll(commandList[8]);
-        std::cout << expireValue << '\n';
+        int64_t expireValue = std::stoll(commandList[10]);
         internalMap.insert(
             {commandList[4],
              {commandList[6], std::chrono::steady_clock::now() +
@@ -73,12 +72,10 @@ public:
     }
 
     if (command == "get") {
-      std::cout << "Running get\n";
       auto found = internalMap.find(commandList[4]);
       if (found != internalMap.end() &&
-          found->second.expireTime < std::chrono::steady_clock::now()) {
+          found->second.expireTime > std::chrono::steady_clock::now()) {
         std::string value = found->second.value;
-
         response = encodeRedisString(value);
       } else {
         response = nullBulkString;
