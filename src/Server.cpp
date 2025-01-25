@@ -19,9 +19,7 @@
 std::unordered_map<std::string, std::function<std::string(const std::string &)>>
     commandMap;
 
-RedisParser parser;
-
-void handleClient(int client_fd) {
+void handleClient(int client_fd, RedisParser parser) {
   std::string totalMessage;
   while (true) {
     char buffer[1024];
@@ -34,7 +32,7 @@ void handleClient(int client_fd) {
 
     // Get the response back from the client if there is supposed to be a
     // response
-    std::string res = parser.handleRedisCommand(totalMessage);
+    std::string res = parser.handleRedisCommandBuffer(totalMessage);
     if (res.length() > 0) {
       send(client_fd, res.c_str(), res.length(), 0);
     }
@@ -42,10 +40,33 @@ void handleClient(int client_fd) {
   }
 }
 
+struct ConfigSettings {
+  std::string filePath;
+  std::string fileName;
+};
+
+ConfigSettings checkForExistingArg(int argc, char **args) {
+  ConfigSettings configSettings;
+  for (int i = 0; i < argc; i++) {
+    if (std::string(args[i]) == "--dir") {
+      configSettings.filePath = args[i + 1];
+    }
+
+    if (std::string(args[i]) == "--dbfilename") {
+      configSettings.fileName = args[i + 1];
+    }
+  }
+
+  return configSettings;
+}
+
 int main(int argc, char **argv) {
   // Flush after every std::cout / std::cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
+
+  ConfigSettings settings = checkForExistingArg(argc, argv);
+  RedisParser parser = RedisParser(settings.fileName, settings.filePath);
 
   int server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (server_fd < 0) {
@@ -83,15 +104,13 @@ int main(int argc, char **argv) {
   int client_addr_len = sizeof(client_addr);
   std::vector<std::thread> client_threads;
 
-  commandMap["echo"] = [](const std::string &echoString) { return "Hi"; };
-
   while (true) {
     std::cout << "Waiting for a client to connect...\n";
     int client_fd = accept(server_fd, (struct sockaddr *)&client_addr,
                            (socklen_t *)&client_addr_len);
 
     // Spin off new thread here to handle client traffic
-    client_threads.emplace_back(handleClient, client_fd);
+    client_threads.emplace_back(handleClient, client_fd, parser);
   }
 
   for (auto &thread : client_threads) {
